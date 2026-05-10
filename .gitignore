@@ -11,4 +11,4 @@ Thumbs.db
 .ipynb_checkpoints/
 .pytest_cache/
 *.log
-data/processed/
+data/raw/
