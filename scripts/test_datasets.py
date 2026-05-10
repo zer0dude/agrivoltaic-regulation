@@ -30,9 +30,9 @@ _results: list[tuple[str, str, str]] = []
 
 def _record(name: str, status: str, detail: str = "") -> None:
     _results.append((name, status, detail))
-    icon = {"PASS": "✓", "WARN": "⚠", "FAIL": "✗"}[status]
-    suffix = f"  — {detail}" if detail else ""
-    print(f"  {icon} {status:<4}  {name}{suffix}")
+    icon = {"PASS": "OK  ", "WARN": "WARN", "FAIL": "FAIL"}[status]
+    suffix = f"  -- {detail}" if detail else ""
+    print(f"  [{icon}]  {name}{suffix}")
 
 
 def _epsg_from_crs(crs_obj) -> int | None:
@@ -210,15 +210,15 @@ def main() -> None:
     print("=" * 60)
 
     if n_fail:
-        print("\nFailed — immediate action required:")
+        print("\nFailed -- immediate action required:")
         for name, status, detail in _results:
             if status == "FAIL":
-                print(f"  ✗ {name.strip()}: {detail}")
+                print(f"  [FAIL]  {name.strip()}: {detail}")
     if n_warn:
-        print("\nWarnings — review before processing:")
+        print("\nWarnings -- review before processing:")
         for name, status, detail in _results:
             if status == "WARN":
-                print(f"  ⚠ {name.strip()}: {detail}")
+                print(f"  [WARN]  {name.strip()}: {detail}")
     print()
 
     sys.exit(1 if n_fail else 0)
