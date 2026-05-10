@@ -14,9 +14,9 @@ from pathlib import Path
 import folium
 import geopandas as gpd
 import streamlit as st
+from streamlit_folium import st_folium
 
 gpd.options.io_engine = "pyogrio"
-from streamlit_folium import st_folium
 
 LAYERS_GPKG = Path(__file__).resolve().parent.parent / "data" / "processed" / "layers.gpkg"
 
@@ -109,23 +109,19 @@ LEGEND_ITEMS: list[tuple[str, str, str]] = [
 
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 
-@st.cache_data(show_spinner="Loading map layers...")
-def _load_layers(gpkg_mtime: float) -> dict[str, gpd.GeoDataFrame]:
-    layers: dict[str, gpd.GeoDataFrame] = {}
-    for name in LAYER_STYLES:
-        layers[name] = gpd.read_file(LAYERS_GPKG, layer=name).to_crs(4326)
-    return layers
+@st.cache_data(show_spinner="Loading layer...")
+def _layer_geojson(name: str, gpkg_mtime: float) -> tuple[str, bool]:
+    """Read one layer from the GeoPackage and return (geojson_str, has_source_column).
 
-
-@st.cache_data(show_spinner=False)
-def _to_geojson(_gdf: gpd.GeoDataFrame, name: str, gpkg_mtime: float) -> str:
-    return _gdf.to_json()
+    Cached per layer name — layers that are never rendered are never loaded.
+    """
+    gdf = gpd.read_file(LAYERS_GPKG, layer=name).to_crs(4326)
+    return gdf.to_json(), "source" in gdf.columns
 
 
 # ── Map builder ───────────────────────────────────────────────────────────────
 
 def _build_map(
-    layers: dict[str, gpd.GeoDataFrame],
     toggles: dict[str, bool],
     gpkg_mtime: float,
     preset: str | None,
@@ -138,8 +134,9 @@ def _build_map(
     )
 
     # Bavaria outline — always visible
+    geojson, _ = _layer_geojson("bavaria_boundary", gpkg_mtime)
     folium.GeoJson(
-        _to_geojson(layers["bavaria_boundary"], "bavaria_boundary", gpkg_mtime),
+        geojson,
         style_function=lambda _: LAYER_STYLES["bavaria_boundary"],
         name="Bavaria boundary",
         tooltip=None,
@@ -147,34 +144,37 @@ def _build_map(
 
     # Candidate area: preset layer OR raw agricultural land
     if preset == "hard_only":
+        geojson, _ = _layer_geojson("eligible_hard_only", gpkg_mtime)
         folium.GeoJson(
-            _to_geojson(layers["eligible_hard_only"], "eligible_hard_only", gpkg_mtime),
+            geojson,
             style_function=lambda _: LAYER_STYLES["eligible_hard_only"],
             name="Eligible land (hard excl. removed)",
             tooltip=folium.GeoJsonTooltip(fields=["Code_18"], aliases=["Land type:"]),
         ).add_to(m)
     elif preset == "all_excl":
+        geojson, _ = _layer_geojson("eligible_all_excl", gpkg_mtime)
         folium.GeoJson(
-            _to_geojson(layers["eligible_all_excl"], "eligible_all_excl", gpkg_mtime),
+            geojson,
             style_function=lambda _: LAYER_STYLES["eligible_all_excl"],
             name="Eligible land (all excl. removed)",
             tooltip=folium.GeoJsonTooltip(fields=["Code_18"], aliases=["Land type:"]),
         ).add_to(m)
     else:
+        geojson, _ = _layer_geojson("agricultural_land", gpkg_mtime)
         folium.GeoJson(
-            _to_geojson(layers["agricultural_land"], "agricultural_land", gpkg_mtime),
+            geojson,
             style_function=lambda _: LAYER_STYLES["agricultural_land"],
             name="Agricultural land",
         ).add_to(m)
 
-    # Overlay layers — rendered in order on top of candidate area
+    # Overlay layers — only loaded when toggled on
     for key, label, _ in ALL_OVERLAY_LAYERS:
         if not toggles.get(key, False):
             continue
+        geojson, has_source = _layer_geojson(key, gpkg_mtime)
         style = LAYER_STYLES[key]
-        has_source = "source" in layers[key].columns
         folium.GeoJson(
-            _to_geojson(layers[key], key, gpkg_mtime),
+            geojson,
             style_function=lambda _, s=style: s,
             tooltip=(
                 folium.GeoJsonTooltip(fields=["source"], aliases=["Type:"])
@@ -220,7 +220,6 @@ def main() -> None:
     )
 
     gpkg_mtime = LAYERS_GPKG.stat().st_mtime
-    layers = _load_layers(gpkg_mtime)
 
     if "preset" not in st.session_state:
         st.session_state["preset"] = None
@@ -298,7 +297,7 @@ def main() -> None:
 
     # ── Map ──────────────────────────────────────────────────────────────────
     preset = st.session_state.get("preset", None)
-    m = _build_map(layers, toggles, gpkg_mtime, preset)
+    m = _build_map(toggles, gpkg_mtime, preset)
     st_folium(m, use_container_width=True, height=680, returned_objects=[])
 
     # ── Legend ───────────────────────────────────────────────────────────────
