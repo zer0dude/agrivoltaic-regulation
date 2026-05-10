@@ -36,6 +36,12 @@ EXPECTED_LAYERS = [
     "water_protection",
     "slope_excluded",
     "non_agricultural_land",
+    "road_setback",
+    "rail_setback",
+    "water_setback",
+    "forest_setback",
+    "eligible_hard_only",
+    "eligible_all_excl",
 ]
 
 _results: list[tuple[str, str, str]] = []
