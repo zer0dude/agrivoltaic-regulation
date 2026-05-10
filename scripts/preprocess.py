@@ -19,7 +19,9 @@ import geopandas as gpd
 import fiona
 import rasterio
 from rasterio.crs import CRS as RasterioCRS
+from rasterio.features import shapes as rasterio_shapes
 from rasterio.mask import mask as rio_mask
+from shapely.geometry import shape
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
@@ -77,8 +79,8 @@ def step_bavaria() -> gpd.GeoDataFrame:
 
 # ── Step 2: E1 Agricultural land ─────────────────────────────────────────────
 
-def step_agricultural_land(bavaria: gpd.GeoDataFrame) -> None:
-    print("\n[2/6] E1 — Agricultural land (CLC2018)")
+def step_agricultural_land(bavaria: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    print("\n[2/8] E1 — Agricultural land (CLC2018)")
     log("reading CLC2018 ...")
     clc = gpd.read_file(E1_PATH)
     log(f"total features: {len(clc):,}  CRS: {clc.crs.to_epsg()}")
@@ -95,6 +97,7 @@ def step_agricultural_land(bavaria: gpd.GeoDataFrame) -> None:
 
     clc = clc[["Code_18", "geometry"]].reset_index(drop=True)
     save_layer(clc, "agricultural_land", simplify_m=25.0)
+    return clc
 
 
 # ── Step 3: E2 Conservation areas ────────────────────────────────────────────
@@ -110,7 +113,7 @@ def _load_e2(rel_path: str, source_label: str, buffer_m: float = 0.0) -> gpd.Geo
 
 
 def step_conservation() -> None:
-    print("\n[3/6] E2 — Conservation areas")
+    print("\n[3/8] E2 — Conservation areas")
 
     hard_parts = [
         _load_e2("nsg_epsg25832_shp/nsg_epsg25832_shp.shp", "NSG"),
@@ -140,7 +143,7 @@ def step_conservation() -> None:
 # ── Step 4: E3 Flood zones ────────────────────────────────────────────────────
 
 def step_flood_zones() -> None:
-    print("\n[4/6] E3 — Flood zones")
+    print("\n[4/8] E3 — Flood zones")
     flood = gpd.read_file(E3_GPKG, layer="hw_flaeche")
     flood = flood[["geometry"]].reset_index(drop=True)
     save_layer(flood, "flood_zones", simplify_m=25.0)
@@ -149,7 +152,7 @@ def step_flood_zones() -> None:
 # ── Step 5: E4 Water protection zones ────────────────────────────────────────
 
 def step_water_protection() -> None:
-    print("\n[5/6] E4 — Water protection zones")
+    print("\n[5/8] E4 — Water protection zones")
     twsg = gpd.read_file(E4_BASE / "twsg_epsg25832_shp" / "twsg_epsg25832.shp")
     hqsg = gpd.read_file(E4_BASE / "hqsg_epsg25832_shp" / "hqsg_epsg25832.shp")
     twsg["source"] = "TWSG"
@@ -166,7 +169,7 @@ def step_water_protection() -> None:
 # ── Step 6: E5 Slope classification ──────────────────────────────────────────
 
 def step_slope(bavaria: gpd.GeoDataFrame) -> None:
-    print("\n[6/6] E5 — Slope classification (DGM200)")
+    print("\n[6/8] E5 — Slope classification (DGM200)")
     log("opening DGM200 raster (forcing CRS = EPSG:25832) ...")
 
     bavaria_geom = [bavaria.union_all().buffer(2000)]
@@ -229,6 +232,44 @@ def step_slope(bavaria: gpd.GeoDataFrame) -> None:
     log(f"saved slope_class.tif  ({size_mb:.1f} MB)")
 
 
+# ── Step 7: E5 slope excluded zone (vectorized) ──────────────────────────────
+
+def step_slope_excluded() -> None:
+    print("\n[7/8] E5 vector — slope excluded (>25%)")
+    with rasterio.open(SLOPE_TIF) as src:
+        data = src.read(1)
+        transform = src.transform
+
+    mask = (data == 6).astype(np.uint8)
+    polys = [
+        shape(geom)
+        for geom, val in rasterio_shapes(mask, mask=mask, transform=transform)
+        if val == 1
+    ]
+    if not polys:
+        log("WARNING: no excluded slope pixels found — skipping layer")
+        return
+    gdf = gpd.GeoDataFrame({"geometry": polys}, crs=25832)
+    gdf = gdf.dissolve().explode(index_parts=False).reset_index(drop=True)
+    log(f"slope_excluded: {len(gdf):,} polygons after dissolve")
+    save_layer(gdf, "slope_excluded", simplify_m=25.0)
+
+
+# ── Step 8: E6 Non-agricultural land ─────────────────────────────────────────
+
+def step_non_agricultural(bavaria: gpd.GeoDataFrame, ag_land: gpd.GeoDataFrame) -> None:
+    print("\n[8/8] E6 — Non-agricultural land (Bavaria minus E1)")
+    log("computing union of agricultural land ...")
+    ag_union = ag_land.union_all()
+    bav_poly = bavaria.union_all()
+    log("computing difference (Bavaria minus agricultural) ...")
+    non_ag_geom = bav_poly.difference(ag_union)
+    gdf = gpd.GeoDataFrame({"geometry": [non_ag_geom]}, crs=25832)
+    gdf = gdf.explode(index_parts=False).reset_index(drop=True)
+    log(f"non_agricultural_land: {len(gdf):,} polygons")
+    save_layer(gdf, "non_agricultural_land", simplify_m=25.0)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -245,18 +286,21 @@ def main() -> None:
 
     try:
         bavaria = step_bavaria()
-        step_agricultural_land(bavaria)
+        ag_land = step_agricultural_land(bavaria)
         step_conservation()
         step_flood_zones()
         step_water_protection()
         step_slope(bavaria)
+        step_slope_excluded()
+        step_non_agricultural(bavaria, ag_land)
     except Exception as exc:
         print(f"\n[FAIL] {exc}", file=sys.stderr)
         raise
 
+    layers_in_gpkg = fiona.listlayers(LAYERS_GPKG)
     print("\n" + "=" * 60)
     print("  All steps complete.")
-    print(f"  layers.gpkg : {LAYERS_GPKG.stat().st_size / 1024**2:.1f} MB")
+    print(f"  layers.gpkg : {LAYERS_GPKG.stat().st_size / 1024**2:.1f} MB  ({len(layers_in_gpkg)} layers)")
     print(f"  slope_class : {SLOPE_TIF.stat().st_size / 1024**2:.1f} MB")
     print("=" * 60 + "\n")
 

@@ -34,6 +34,8 @@ EXPECTED_LAYERS = [
     "conservation_soft",
     "flood_zones",
     "water_protection",
+    "slope_excluded",
+    "non_agricultural_land",
 ]
 
 _results: list[tuple[str, str, str]] = []
