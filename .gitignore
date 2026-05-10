@@ -12,6 +12,7 @@ Thumbs.db
 .pytest_cache/
 *.log
 data/raw/
+scripts/
 CLAUDE.md
 1-s2.0-S0960148125007013-main.pdf
 agrivoltaics_bavaria_project.md
