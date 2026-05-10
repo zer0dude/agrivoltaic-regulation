@@ -14,6 +14,8 @@ from pathlib import Path
 import folium
 import geopandas as gpd
 import streamlit as st
+
+gpd.options.io_engine = "pyogrio"
 from streamlit_folium import st_folium
 
 LAYERS_GPKG = Path(__file__).resolve().parent.parent / "data" / "processed" / "layers.gpkg"
